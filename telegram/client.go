@@ -42,6 +42,7 @@ type clientData struct {
 	parseMode        string
 	logLevel         utils.LogLevel
 	sleepThresholdMs int
+	albumWaitTime    int64
 	botAcc           bool
 	me               *UserObj
 }
@@ -91,6 +92,7 @@ type ClientConfig struct {
 	CacheSenders     bool                 // cache the exported file op sender
 	TransportMode    string               // The transport mode to use (Abridged, Intermediate, Full)
 	SleepThresholdMs int                  // The threshold in milliseconds to sleep before flood
+	AlbumWaitTime    int64                // The time to wait for album messages (in milliseconds)
 	FloodHandler     func(err error) bool // The flood handler to use
 	ErrorHandler     func(err error)      // The error handler to use
 }
@@ -166,7 +168,7 @@ func (c *Client) setupMTProto(config ClientConfig) error {
 			customHost = true
 			return config.IpAddr
 		} else {
-			return utils.GetHostIp(config.DataCenter, config.TestMode, config.ForceIPv6)
+			return utils.DcList.GetHostIp(config.DataCenter, config.TestMode, config.ForceIPv6)
 		}
 	}
 
@@ -262,6 +264,7 @@ func (c *Client) setupClientData(cnf ClientConfig) {
 	c.clientData.logLevel = getValue(cnf.LogLevel, LogInfo)
 	c.clientData.parseMode = getValue(cnf.ParseMode, "HTML")
 	c.clientData.sleepThresholdMs = getValue(cnf.SleepThresholdMs, 0)
+	c.clientData.albumWaitTime = getValue(cnf.AlbumWaitTime, 600)
 
 	if cnf.LogLevel == LogDebug {
 		c.Log.SetLevel(LogDebug)
@@ -307,7 +310,7 @@ func (c *Client) InitialRequest() error {
 			}
 		}
 
-		utils.SetDCs(dcs, cdnDcs) // set the upto-date DC configuration for the library
+		c.DcList.SetDCs(dcs, cdnDcs) // set the upto-date DC configuration for the library
 	}
 
 	return nil
@@ -342,6 +345,7 @@ func (c *Client) IsConnected() bool {
 }
 
 func (c *Client) Start() error {
+	c.MTProto.SetTerminated(false) // reset the terminated state
 	if !c.IsConnected() {
 		if err := c.Connect(); err != nil {
 			return err
@@ -353,6 +357,18 @@ func (c *Client) Start() error {
 		}
 	} else if err != nil {
 		return err
+	}
+
+	c.stopCh = make(chan struct{}) // reset the stop channel
+	return nil
+}
+
+func (c *Client) St() error {
+	c.MTProto.SetTerminated(false) // reset the terminated state
+	if !c.IsConnected() {
+		if err := c.Connect(); err != nil {
+			return err
+		}
 	}
 
 	c.stopCh = make(chan struct{}) // reset the stop channel
@@ -471,6 +487,9 @@ func (es *ExSenders) Close() {
 
 // CreateExportedSender creates a new exported sender for the given DC
 func (c *Client) CreateExportedSender(dcID int, cdn bool, authParams ...*AuthExportedAuthorization) (*mtproto.MTProto, error) {
+	if dcID <= 0 {
+		return nil, errors.New("invalid data center ID")
+	}
 	const retryLimit = 3 // Retry only once
 	var lastError error
 

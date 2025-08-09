@@ -73,11 +73,13 @@ func (c *Client) SendMessage(peerID, message any, opts ...*SendOptions) (*NewMes
 		textMessage = message.MessageText()
 		rawText = message.MessageText()
 		media = message.Media()
+		opt.ReplyMarkup = getValue(opt.ReplyMarkup, *message.ReplyMarkup())
 	case *NewMessage:
 		entities = message.Message.Entities
 		textMessage = message.MessageText()
 		rawText = message.MessageText()
 		media = message.Media()
+		opt.ReplyMarkup = getValue(opt.ReplyMarkup, *message.ReplyMarkup())
 	default:
 		return nil, fmt.Errorf("invalid message type: %s", reflect.TypeOf(message))
 	}
@@ -87,6 +89,9 @@ func (c *Client) SendMessage(peerID, message any, opts ...*SendOptions) (*NewMes
 	media = getValue(media, opt.Media)
 	if media != nil {
 		opt.Caption = getValueAny(opt.Caption, rawText)
+		if opt.Entities == nil {
+			opt.Entities = entities
+		}
 		return c.SendMedia(peerID, media, convertOption(opt))
 	}
 	senderPeer, err := c.ResolvePeer(peerID)
@@ -1710,6 +1715,7 @@ func convertOption(s *SendOptions) *MediaOptions {
 		SendAs:        s.SendAs,
 		Thumb:         s.Thumb,
 		TTL:           s.TTL,
+		Entities:      s.Entities,
 		ForceDocument: s.ForceDocument,
 		FileName:      s.FileName,
 		Attributes:    s.Attributes,

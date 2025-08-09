@@ -26,7 +26,7 @@ func FileExists(path string) bool {
 }
 
 func ResolveDataCenterIP(dc int, test, ipv6 bool) string {
-	return utils.GetHostIp(dc, test, ipv6)
+	return utils.GetDefaultHostIp(dc, test, ipv6)
 }
 
 func joinAbsWorkingDir(filename string) string {
@@ -477,7 +477,9 @@ func (c *Client) getSendableMedia(mediaFile any, attributes *MediaMetadata) (Inp
 	var thumbnail InputFile
 
 	switch thumb := attr.Thumb.(type) {
-	case InputFile, *InputFile, nil:
+	case InputFile, *InputFile:
+		thumbnail = getValueAny(thumb, &InputFileObj{}).(InputFile)
+	case nil:
 
 	default:
 		fi, err := c.UploadFile(thumb)
@@ -1068,6 +1070,26 @@ func packDeleteMessage(c *Client, delete Update) *DeleteMessage {
 
 	deleteMessage.Client = c
 	return deleteMessage
+}
+
+func packJoinRequest(c *Client, update *UpdatePendingJoinRequests) *JoinRequestUpdate {
+	var (
+		jr = &JoinRequestUpdate{}
+	)
+	jr.Client = c
+	jr.OriginalUpdate = update
+	jr.Channel, _ = c.GetChannel(c.GetPeerID(update.Peer))
+
+	for _, userID := range update.RecentRequesters {
+		if user, err := c.GetUser(userID); err == nil {
+			jr.Users = append(jr.Users, user)
+		} else {
+			c.Log.Debug(errors.Wrapf(err, "getting user %d for join request", userID))
+		}
+	}
+
+	jr.PendingCount = update.RequestsPending
+	return jr
 }
 
 func packInlineQuery(c *Client, query *UpdateBotInlineQuery) *InlineQuery {

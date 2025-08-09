@@ -5,6 +5,8 @@ package telegram
 import (
 	"bytes"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strconv"
 
 	"strings"
@@ -79,7 +81,8 @@ func parseHTMLToTags(htmlStr string) (string, []Tag, error) {
 	var parseNode func(*html.Node, int32)
 	var openTags []Tag
 	parseNode = func(n *html.Node, offset int32) {
-		if n.Type == html.ElementNode {
+		switch n.Type {
+		case html.ElementNode:
 			// Only record tag information for non-body, non-html, non-head, non-p tags
 			if supportedTag(n.Data) {
 				tagType := n.Data
@@ -98,7 +101,7 @@ func parseHTMLToTags(htmlStr string) (string, []Tag, error) {
 				}
 
 			}
-		} else if n.Type == html.TextNode {
+		case html.TextNode:
 			// Write the text content of this node to the buffer
 			textBuf.WriteString(n.Data)
 			offset += utf16RuneCountInString(n.Data)
@@ -155,9 +158,10 @@ func getTextLength(n *html.Node) int32 {
 	var tagLength int32 = 0
 	currentNode := n.FirstChild
 	for currentNode != nil {
-		if currentNode.Type == html.TextNode {
+		switch currentNode.Type {
+		case html.TextNode:
 			tagLength += utf16RuneCountInString(trimTrailing(currentNode.Data))
-		} else if currentNode.Type == html.ElementNode {
+		case html.ElementNode:
 			tagLength += getTextLength(currentNode)
 		}
 		currentNode = currentNode.NextSibling
@@ -179,7 +183,37 @@ func parseTagsToEntity(tags []Tag) []MessageEntity {
 			switch {
 			case tag.Attrs["href"] != "" && strings.HasPrefix(tag.Attrs["href"], "mailto:"):
 				entities = append(entities, &MessageEntityEmail{tag.Offset, tag.Length})
-
+			case tag.Attrs["href"] != "" && strings.HasPrefix(tag.Attrs["href"], "tg://user"):
+				u, err := url.Parse(tag.Attrs["href"])
+				if err == nil {
+					id := u.Query().Get("id")
+					if id != "" {
+						userID, _ := strconv.ParseInt(id, 10, 64)
+						if userID != 0 {
+							entities = append(entities, &MessageEntityMentionName{
+								Offset: tag.Offset,
+								Length: tag.Length,
+								UserID: userID,
+							})
+						}
+					}
+				}
+			case tag.Attrs["href"] != "" && strings.HasPrefix(tag.Attrs["href"], "tg://emoji"):
+				u, err := url.Parse(tag.Attrs["href"])
+				if err == nil {
+					id := u.Query().Get("id")
+					if id != "" {
+						emojiID, _ := strconv.ParseInt(id, 10, 64)
+						if emojiID != 0 {
+							entities = append(entities, &MessageEntityCustomEmoji{
+								Offset: tag.Offset,
+								Length: tag.Length,
+								DocumentID: emojiID,
+							})
+						}
+					}
+				}
+				
 			case tag.Attrs["href"] == "":
 				entities = append(entities, &MessageEntityURL{tag.Offset, tag.Length})
 			default:
@@ -430,26 +464,13 @@ func convertCodeBlockSyntax(markdown string) string {
 }
 
 func convertLinksSyntax(markdown string) string {
-	for {
-		start := strings.Index(markdown, "[")
-		if start == -1 {
-			break
-		}
-		middle := strings.Index(markdown[start:], "](")
-		if middle == -1 {
-			break
-		}
-		middle += start
-		end := strings.Index(markdown[middle:], ")")
-		if end == -1 {
-			break
-		}
-		end += middle
-		text := markdown[start+1 : middle]
-		url := html.EscapeString(markdown[middle+2 : end])
-		markdown = markdown[:start] + "<a href=\"" + url + "\">" + text + "</a>" + markdown[end+1:]
-	}
-	return markdown
+	re := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	return re.ReplaceAllStringFunc(markdown, func(m string) string {
+		parts := re.FindStringSubmatch(m)
+		text := html.EscapeString(parts[1])
+		url := html.EscapeString(parts[2])
+		return fmt.Sprintf(`<a href="%s">%s</a>`, url, text)
+	})
 }
 
 func convertEmojiSyntax(markdown string) string {
